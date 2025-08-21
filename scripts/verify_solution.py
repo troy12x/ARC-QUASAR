@@ -13,6 +13,15 @@ def print_grid(tensor, title=""):
         print(" ".join(map(str, row)))
     print("\n")
 
+def unpad_grid(padded_grid, original_size):
+    """Cuts down a padded grid to its original size."""
+    original_rows, original_cols = original_size
+    padded_rows, padded_cols = len(padded_grid), len(padded_grid[0])
+    if original_rows > padded_rows or original_cols > padded_cols:
+        return padded_grid
+    unpadded_grid = [[padded_grid[r][c] for c in range(original_cols)] for r in range(original_rows)]
+    return unpadded_grid
+
 def verify(args):
     config = GridLNNConfig(
         grid_size=(args.grid_size, args.grid_size),
@@ -47,6 +56,15 @@ def verify(args):
         return
 
     print(f"Loaded {len(models)} specialist models.")
+
+    # Create a mapping from task_id to specialist model
+    specialist_models = {}
+    if args.model_paths:
+        for path in args.model_paths:
+            task_id = os.path.basename(path).split('_')[-1].split('.')[0]
+            if os.path.basename(path) in models:
+                specialist_models[task_id] = (os.path.basename(path), models[os.path.basename(path)])
+        print(f"Created map for {len(specialist_models)} specialist models.")
 
     submission = {}
 
@@ -87,37 +105,65 @@ def verify(args):
         best_accuracy = -1.0
         task_solved = False
 
-        for model_name, model in models.items():
+        # --- Specialist Model Logic ---
+        if task_id in specialist_models:
+            model_name, model = specialist_models[task_id]
+            print(f"  Specialist model found: {model_name}")
             with torch.no_grad():
                 logits = model(input_batch)
                 prediction = torch.argmax(logits, dim=-1)
             
             pixel_accuracy = (prediction == target_batch).float().mean().item()
-
-            if pixel_accuracy > best_accuracy:
-                best_accuracy = pixel_accuracy
-                best_prediction = prediction
+            best_prediction = prediction
+            best_accuracy = pixel_accuracy
 
             if pixel_accuracy == 1.0:
                 print(f"  [✅] {model_name}: Solved (100.00% accuracy)")
-                if not task_solved:
-                    solved_count += 1
-                    task_solved = True
-                # Use the first solver's prediction and stop checking other models
-                break 
+                solved_count += 1
+                task_solved = True
             else:
-                print(f"  [❌] {model_name}: Failed ({pixel_accuracy:.2%})")
+                print(f"  [❌] {model_name}: Failed ({pixel_accuracy:.2%}). Falling back to ensemble.")
         
+        # --- Ensemble Fallback Logic ---
+        if not task_solved:
+            # If no specialist was found, or if the specialist failed, run the ensemble.
+            for model_name, model in models.items():
+                # Skip the specialist if it was already tried and failed
+                if task_id in specialist_models and model_name == specialist_models[task_id][0]:
+                    continue
+
+                with torch.no_grad():
+                    logits = model(input_batch)
+                    prediction = torch.argmax(logits, dim=-1)
+                
+                pixel_accuracy = (prediction == target_batch).float().mean().item()
+
+                if pixel_accuracy > best_accuracy:
+                    best_accuracy = pixel_accuracy
+                    best_prediction = prediction
+
+                if pixel_accuracy == 1.0:
+                    print(f"  [✅] {model_name} (Ensemble): Solved (100.00% accuracy)")
+                    if not task_solved:
+                        solved_count += 1
+                        task_solved = True
+                    # Use the first solver's prediction and stop checking other models
+                    break 
+                else:
+                    # Don't print failure for every model in ensemble unless it's the best so far
+                    pass
+
         if not task_solved:
             print(f"--- Task Failed by all models (Best accuracy: {best_accuracy:.2%}) ---")
 
         # Format the prediction for the submission file
         if best_prediction is not None:
             task_predictions = []
-            for i in range(len(test_cases)):
-                # Convert tensor to list for JSON serialization
-                pred_grid = best_prediction[i].cpu().numpy().tolist()
-                task_predictions.append({"attempt_1": pred_grid, "attempt_2": pred_grid})
+            for i, test_case in enumerate(test_cases):
+                original_output_size = (len(test_case['output']), len(test_case['output'][0]))
+                padded_pred_grid = best_prediction[i].cpu().numpy().tolist()
+                unpadded_pred_grid = unpad_grid(padded_pred_grid, original_output_size)
+                task_predictions.append({"attempt_1": unpadded_pred_grid, "attempt_2": unpadded_pred_grid})
             submission[task_id] = task_predictions
 
     print(f"\n--- Evaluation Summary ---")
