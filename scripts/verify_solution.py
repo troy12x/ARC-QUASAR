@@ -48,13 +48,18 @@ def verify(args):
 
     print(f"Loaded {len(models)} specialist models.")
 
+    submission = {}
+
     if args.task_files:
         task_files = args.task_files
         print(f"--- On {len(task_files)} specified tasks ---")
     elif args.task_file:
         task_files = [args.task_file]
         print(f"--- On single task: {os.path.basename(args.task_file)} ---")
-    else:
+    elif args.model_paths or args.model_path:
+        task_files = [os.path.join(args.data_path, f) for f in os.listdir(args.data_path) if f.endswith('.json')]
+        print(f"--- On all {len(task_files)} tasks in: {args.data_path} ---")
+    else: # Default case: run all models in solved_models_dir on all tasks in data_path
         task_files = [os.path.join(args.data_path, f) for f in os.listdir(args.data_path) if f.endswith('.json')]
         print(f"--- On all {len(task_files)} tasks in: {args.data_path} ---")
 
@@ -75,30 +80,53 @@ def verify(args):
         input_batch = torch.stack(inputs).to(args.device)
         target_batch = torch.stack(targets).to(args.device)
 
-        task_solved_by_any = False
-        print(f"--- Verifying Task: {task_filename} ---")
+        task_id = task_filename.split('.')[0]
+        print(f"--- Verifying Task: {task_id} ---")
+
+        best_prediction = None
+        best_accuracy = -1.0
+        task_solved = False
+
         for model_name, model in models.items():
             with torch.no_grad():
                 logits = model(input_batch)
                 prediction = torch.argmax(logits, dim=-1)
             
-            # Calculate pixel-wise accuracy
             pixel_accuracy = (prediction == target_batch).float().mean().item()
+
+            if pixel_accuracy > best_accuracy:
+                best_accuracy = pixel_accuracy
+                best_prediction = prediction
 
             if pixel_accuracy == 1.0:
                 print(f"  [✅] {model_name}: Solved (100.00% accuracy)")
-                if not task_solved_by_any:
+                if not task_solved:
                     solved_count += 1
-                    task_solved_by_any = True
+                    task_solved = True
+                # Use the first solver's prediction and stop checking other models
+                break 
             else:
                 print(f"  [❌] {model_name}: Failed ({pixel_accuracy:.2%})")
         
-        if not task_solved_by_any:
-            print(f"--- Task Failed by all models ---")
+        if not task_solved:
+            print(f"--- Task Failed by all models (Best accuracy: {best_accuracy:.2%}) ---")
+
+        # Format the prediction for the submission file
+        if best_prediction is not None:
+            task_predictions = []
+            for i in range(len(test_cases)):
+                # Convert tensor to list for JSON serialization
+                pred_grid = best_prediction[i].cpu().numpy().tolist()
+                task_predictions.append({"attempt_1": pred_grid, "attempt_2": pred_grid})
+            submission[task_id] = task_predictions
 
     print(f"\n--- Evaluation Summary ---")
-    print(f"Model Ensemble: {args.solved_models_dir}")
     print(f"Solved {solved_count} out of {total_tasks} tasks ({solved_count/total_tasks:.2%})")
+
+    if args.submission_file:
+        with open(args.submission_file, 'w') as f:
+            json.dump(submission, f, indent=4)
+        print(f"\nSubmission file saved to: {args.submission_file}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Verify a solved Grid LNN model.")
@@ -113,6 +141,7 @@ if __name__ == '__main__':
     parser.add_argument('--hidden_dim', type=int, default=64, help='Dimension of hidden states used during training.')
     parser.add_argument('--evolution_steps', type=int, default=16, help='Number of LNN evolution steps used during training.')
     parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='Device to evaluate on.')
+    parser.add_argument('--submission_file', type=str, default='submission.json', help='Path to save the submission JSON file.')
     
     args = parser.parse_args()
     verify(args)
