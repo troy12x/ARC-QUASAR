@@ -29,18 +29,28 @@ The main scripts are located in the `scripts/` directory.
 To train a new base model from scratch:
 
 ```bash
-python scripts/train_grid_lnn.py --data_path ./ARC-AGI-2/data/training --save_path models/base_model.pth
+python scripts/train_grid_lnn.py --data_path c:/quasarv4/ARC-AGI-2/data/training --save_path models/base_model.pth
 ```
 
-### 2. Evaluating a Model
+### 2. Advanced Training via Adaptation (evaluate_grid_lnn.py)
 
-To evaluate a trained model's performance on a set of evaluation tasks through adaptation:
+**Note on Naming:** The script `evaluate_grid_lnn.py` is misleadingly named. It is not a simple evaluation tool. Instead, it is a crucial part of the training process that takes a base model and significantly improves its general problem-solving capabilities using reinforcement learning-inspired techniques.
+
+**How it Works:**
+This script iterates through a dataset of tasks (like the evaluation set) and performs a complex adaptation process on the base model for each one. It uses concepts like temperature-based sampling, self-correction, and other heuristics to explore different solutions and learn from its failures. The goal is to produce a more robust and capable model that can then be used for the final, targeted adaptation on unseen tasks.
+
+In essence, this script 'trains the model how to adapt'.
 
 ```bash
+# Run the advanced adaptation/training process
 python scripts/evaluate_grid_lnn.py --model_path models/base_model.pth --data_path ./ARC-AGI-2/data/evaluation
 ```
 
 ### 3. Verifying Solutions
+
+After the long, advanced training process (using `evaluate_grid_lnn.py`), you will find that the resulting model has developed a high accuracy on specific tasks. It is not guaranteed to achieve a perfect 100% score, but it will often be very close (e.g., 90% or higher). This is the ideal point to begin the final, targeted fine-tuning.
+
+This script helps you verify the performance of these specialized models. This is also where manual adaptation, as described in the next section, becomes critical for pushing a model from high accuracy to a perfect solution.
 
 To check if a set of specialized (adapted) models can solve the evaluation tasks directly:
 
